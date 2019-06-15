@@ -2,7 +2,7 @@ import random
 
 
 with open('data.txt', 'w') as f:
-    for i in range(0, 200):
+    for i in range(0, 2000):
         x = random.uniform(1, 100)
         y = random.uniform(1, 100)
         if y // 50 == 1:

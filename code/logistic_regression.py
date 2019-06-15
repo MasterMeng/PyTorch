@@ -14,15 +14,15 @@ with open('data.txt', 'r') as f:
     # print(data)
 
 # 使用matplotlib将数据画出来
-x0 = list(filter(lambda x: x[-1] == 0.0, data))
-x1 = list(filter(lambda x: x[-1] == 1.0, data))
+# x0 = list(filter(lambda x: x[-1] == 0.0, data))
+# x1 = list(filter(lambda x: x[-1] == 1.0, data))
 # plot_x0_0 = [i[0] for i in x0]
 # plot_x0_1 = [i[1] for i in x0]
 # plot_x1_0 = [i[0] for i in x1]
 # plot_x1_1 = [i[1] for i in x1]
 
-# plt.plot(plot_x0_0,plot_x0_1,'ro',label='x_0')
-# plt.plot(plot_x1_0,plot_x1_1,'bo',label='x_1')
+# plt.plot(plot_x0_0, plot_x0_1, 'ro', label='x_0')
+# plt.plot(plot_x1_0, plot_x1_1, 'bo', label='x_1')
 # # plt.legend('best')
 # plt.show()
 
@@ -50,6 +50,7 @@ optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.9)
 
 x_data = torch.FloatTensor([(i[0], i[1]) for i in data])
 y_data = torch.FloatTensor([(i[2],) for i in data])
+
 # print(x_data)
 # print(y_data)
 
@@ -66,19 +67,30 @@ while True:
     loss.backward()
     optimizer.step()
 
-    if epoch % 20 == 0:
+    if epoch % 1000 == 0:
         print('Epoch[{}],loss:{:.6f}'.format(epoch, loss.item()))
 
-    if loss.item() <= 0.300118:
+    if epoch >= 1000000:
         break
 
     epoch += 1
 
 print(model.state_dict())
 
-model.eval()
-predict = model(Variable(x_data))
-predict = predict.data.numpy()
+# model.eval()
+# predict = model(Variable(x_data))
+# predict = predict.data.numpy()
+# plt.plot(Variable(x_data).data.numpy(), predict, 'ro')
+# plt.show()
 
-plt.plot(Variable(x_data).data.numpy(), predict, 'ro')
+
+w0, w1 = model.lr.weight[0]
+w0 = w0.item()
+w1 = w1.item()
+
+bias = model.lr.bias[0]
+
+plot_x = numpy.arange(30, 100, 0.1)
+plot_y = (-float(w0) * plot_x - float(bias)) / float(w1)
+plt.plot(plot_x, plot_y)
 plt.show()
