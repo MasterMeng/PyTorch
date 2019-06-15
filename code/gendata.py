@@ -5,7 +5,7 @@ with open('data.txt', 'w') as f:
     for i in range(0, 200):
         x = random.uniform(1, 100)
         y = random.uniform(1, 100)
-        if random.uniform(1, 100) // 50 == 1:
+        if y // 50 == 1:
             c = 1
         else:
             c = 0
