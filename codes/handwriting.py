@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
 batch_size = 64
-learning_rate = 1e-2
+learning_rate = 1e-3
 num_epoches = 5
 
 # 定义三层全连接神经网络
@@ -80,28 +80,29 @@ class Batch_Net(nn.Module):
         return x
 
 
-class Model(nn.Module):
+class CNN(nn.Module):
     def __init__(self):
-        super(Model, self).__init__()
-        self.conv1 = torch.nn.Sequential(
-            torch.nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1),
-            torch.nn.ReLU(),
-            torch.nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
-            torch.nn.ReLU(),
-            torch.nn.MaxPool2d(stride=2, kernel_size=2))
+        super(CNN, self).__init__()
 
-        self.dense = torch.nn.Sequential(
-            torch.nn.Linear(14*14*128, 1024),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(p=0.5),
-            torch.nn.Linear(1024, 10)
-        )
+        self.layer1 = nn.Sequential(
+            nn.Conv2d(1, 16, kernel_size=3), nn.BatchNorm2d(16), nn.ReLU(inplace=True))
+        self.layer2 = nn.Sequential(nn.Conv2d(16, 32, kernel_size=3), nn.BatchNorm2d(
+            32), nn.ReLU(inplace=True), nn.MaxPool2d(kernel_size=2, stride=2))
+        self.layer3 = nn.Sequential(
+            nn.Conv2d(32, 64, kernel_size=3), nn.BatchNorm2d(64), nn.ReLU(inplace=True))
+        self.layer4 = nn.Sequential(nn.Conv2d(64, 128, kernel_size=3), nn.BatchNorm2d(
+            128), nn.ReLU(inplace=True), nn.MaxPool2d(kernel_size=2, stride=2))
+        self.fc = nn.Sequential(nn.Linear(128*4*4, 1024), nn.ReLU(inplace=True),
+                                nn.Linear(1024, 128), nn.ReLU(inplace=True), nn.Linear(128, 10))
 
     def forward(self, x):
-        x = self.conv1(x)
-        x = x.view(-1, 14*14*128)
-        x = self.dense(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
 
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
         return x
 
 
@@ -116,13 +117,9 @@ test_dataset = datasets.MNIST(root='./data', train=False, transform=data_tf)
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-# # 卷积网络
-# model = Model()
-# if torch.cuda.is_available():
-#     model = model.cuda()
 
-# 全连接神经网络
-model = simpleNet(28*28,300,100,10)
+# model = simpleNet(28*28, 300, 100, 10)
+model = CNN()
 if torch.cuda.is_available():
     model = model.cuda()
 
@@ -133,13 +130,11 @@ critertion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
 for epoch in range(num_epoches):
-    print('Epoch {}/{}'.format(epoch, num_epoches))
+    print('Epoch {}/{} train ok'.format(epoch, num_epoches))
     i = 0
+    loss_total = 0
     for data in train_loader:
         x_train, y_train = data
-
-        # for FC
-        x_train = x_train.view(x_train.size(0),-1)
 
         outputs = model(x_train)
 
@@ -149,17 +144,16 @@ for epoch in range(num_epoches):
         loss.backward()
         optimizer.step()
 
+        loss_total += loss.item()
+
         if i % 1000 == 0:
-            print('loss: {:.4f}'.format(loss.item()))
+            print('Epoch {}/{},loss:{:.4f}'.format(epoch, num_epoches, loss.item()))
 
+    # print('Epoch {}/{} train ok,loss:{}'.format(epoch, num_epoches,loss_total/len(train_loader)))
     print('train ok')
-
     test_correct = 0
     for data in test_loader:
         x_test, y_test = data
-
-        # for FC
-        x_test = x_test.view(x_test.size(0),-1)
 
         outputs = model(x_test)
 
