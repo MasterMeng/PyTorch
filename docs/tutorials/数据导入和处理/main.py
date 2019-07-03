@@ -193,10 +193,49 @@ transformed_dataset = FaceLandmarksDataset(
     transform=transforms.Compose([Rescale(256), RandomCrop(224), ToTensor()])
 )
 
-for i in range(len(transformed_dataset)):
-    sample = transformed_dataset[i]
+# for i in range(len(transformed_dataset)):
+#     sample = transformed_dataset[i]
 
-    print(i, sample['image'].size(), sample['landmarks'].size())
+#     print(i, sample['image'].size(), sample['landmarks'].size())
 
-    if i == 3:
+#     if i == 3:
+#         break
+
+
+dataloader = DataLoader(transformed_dataset, batch_size=4,
+                        shuffle=True, num_workers=4)
+
+
+def show_landmarks_batch(sample_batched):
+    '''
+    批量展示样本
+    '''
+    images_batch, landmarks_batch = sample_batched['image'], sample_batched['landmarks']
+    batch_size = len(sample_batched)
+    im_size = images_batch.size(2)
+    grid_border_size = 2
+
+    grid = utils.make_grid(images_batch)
+    plt.imshow(grid.numpy().transpose((1, 2, 0)))
+
+    for i in range(batch_size):
+        plt.scatter(
+            landmarks_batch[i, :, 0].numpy() + i * im_size +
+            (i+1)*grid_border_size,
+            landmarks_batch[i, :, 1].numpy() + grid_border_size,
+            s=10, marker='.', c='r'
+        )
+        plt.title('Batch from dataloader')
+
+
+for i_batch, sample_batched in enumerate(dataloader):
+    print(i_batch, sample_batched['image'].size(),
+          sample_batched['landmarks'].size())
+
+    if i_batch == 3:
+        plt.figure()
+        show_landmarks_batch(sample_batched)
+        plt.axis('off')
+        plt.ioff()
+        plt.show()
         break
