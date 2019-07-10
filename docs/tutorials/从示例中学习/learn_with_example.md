@@ -304,4 +304,219 @@ with tf.Session() as sess:
 
 ## nn 模块  
 
-### PyTorch: nn
+### PyTorch: nn  
+
+计算图和`autograd`是定义复杂运算和自动求导的非常强大的典范，然而对于大型的神经网络，原始的`autograd`是远远不够。  
+
+在构建神经网络时，我们经常考虑将计算分层进行，其中一些计算具有可学习的参数，这些参数将在学习过程中得到优化。  
+
+在TensorFlow中，**Keras**、**TensorFlow-Slim**和**TFLearn**等包提供了对原始计算图的高级抽象，这些抽象对构建神经网络有很大帮助。  
+
+在PyTorch中，`nn`包提供了同样的服务。`nn`包中定义了一系列的**Modules**，可以看做是神经网的层。模型接受输入张量并计算输出张量，同时像张量包含可学习参数一样保留内部状态。`nn`包中同样定义了一系列的损失函数以便训练神经网。  
+
+在接下来的例子里使用`nn`包来实现我们的两层网络：  
+
+```python
+import torch
+
+# N是批量大小，D_in 是输入维度，H 是隐藏维度， D_out 是输出维度
+N, D_in, H, D_out = 64, 1000, 100, 10
+
+# 随机创建输入输出数据
+x = torch.randn(N, D_in)
+y = torch.randn(N, D_out)  
+
+# 使用nn包将我们的模型定义为一系列的层。nn.Sequential是一个模型，它包含其它模型并按顺序使用它们来生成输出。
+# 每次模型使用线性函数从输入中计算输出，并保留权重和偏置的张量。
+model = torch.nn.Sequential(
+    torch.nn.Linear(D_in,H),
+    torch.nn.ReLU(),
+    torch.nn.Linear(H,D_out),
+)
+
+# nn包中也包含了常用的损失函数定义，这里我们使用Mean Squared Error(MSE，均方误差)作为我们的损失函数
+loss_fn = torch.nn.MSELoss(reduction='sum')
+
+learning_rate = 1e-4
+for i in range(500):
+    # 前向传递：使用模型计算关于x的预测y
+    y_pred = model(x)
+
+    # 计算损失
+    loss = loss_fn(y_pred,y)
+    print(i,loss.item())
+
+    # 反向传递前零化梯度
+    model.zero_grad()
+
+    # 反向传递
+    loss.backward()
+
+    # 更新权重
+    with torch.no_grad():
+        for param in model.parameters():
+            param -= learning_rate * param.grad
+```  
+
+### PyTorch: optim(优化)  
+
+到目前为止，我们通过手动改变带有可学习参数的张量的方式（使用`torch.no_grad()`或者`.data`的方式避免在autograd过程中追踪历史记录）来更新我们模型的权重。对于像随机梯度下降这样的简单优化算法，这并不是一个巨大的负担，但在实践中，我们经常使用更复杂的优化器(如AdaGrad、RMSProp、Adam等)来训练神经网络。  
+
+在PyTorch中，`optim`包抽象了优化算法的概念，并提供了常用优化算法的实现。  
+
+在接下来的例子中，我们想之前一样使用`nn`包定义我们的模型，但是我们使用`optim`包提供的Adam算法来优化我们的模型：  
+
+```python
+import torch
+
+# N是批量大小，D_in 是输入维度，H 是隐藏维度， D_out 是输出维度
+N, D_in, H, D_out = 64, 1000, 100, 10
+
+# 随机创建输入输出数据
+x = torch.randn(N, D_in)
+y = torch.randn(N, D_out)  
+
+# 使用nn包将我们的模型定义为一系列的层。nn.Sequential是一个模型，它包含其它模型并按顺序使用它们来生成输出。
+# 每次模型使用线性函数从输入中计算输出，并保留权重和偏置的张量。
+model = torch.nn.Sequential(
+    torch.nn.Linear(D_in,H),
+    torch.nn.ReLU(),
+    torch.nn.Linear(H,D_out),
+)
+
+# nn包中也包含了常用的损失函数定义，这里我们使用Mean Squared Error(MSE，均方误差)作为我们的损失函数
+loss_fn = torch.nn.MSELoss(reduction='sum')
+
+# 学习率和优化算法
+learning_rate = 1e-4
+optimizer = torch.optim.Adam(model.parameters(),lr=learning_rate)
+
+for i in range(500):
+    # 前向传递：使用模型计算关于x的预测y
+    y_pred = model(x)
+
+    # 计算损失
+    loss = loss_fn(y_pred,y)
+    print(i,loss.item())
+
+    # 反向传递前零化梯度
+    optimizer.zero_grad()
+
+    # 反向传递
+    loss.backward()
+
+    # 调用优化算法的setp()函数来更新参数
+    optimizer.step()
+```  
+
+### PyTorch: 自定义nn模型  
+
+有时候你可能需要比现有的一系列模型更复杂的特殊模型，这是你可以通过将`nn.Module`子类化的方式定义你自己的模型，并定义`forward`函数来接受输入张量并使用其他模块或张量上的其他autograd操作来生成输出张量。  
+
+接下来我们使用自定义模型子类来实现我们的两次网络：  
+
+```python
+import torch
+
+class TwoLayerNet(torch.nn.Module):
+    def __init__(self,D_in,H,D_out):
+        super(TwoLayerNet,self).__init__()
+        self.linear1 = torch.nn.Linear(D_in,H)
+        self.linear2 = torch.nn.Linear(H,D_out)
+
+    def forward(self,x):
+        h_relu = self.linear1(x).clamp(min=0)
+        y_pred = self.linear2(h_relu)
+        return y_pred
+
+# N是批量大小，D_in 是输入维度，H 是隐藏维度， D_out 是输出维度
+N, D_in, H, D_out = 64, 1000, 100, 10
+
+# 随机创建输入输出数据
+x = torch.randn(N, D_in)
+y = torch.randn(N, D_out)  
+
+# 实例化自定义模型
+model = TwoLayerNet(D_in,H,D_out)
+
+# 损失函数和优化函数
+criterion = torch.nn.MSELoss(reduction='sum')
+optimizer = torch.optim.SGD(model.parameters(),lr=1e-4)
+
+for i in range(500):
+    # 前向传递：使用模型计算关于x的预测y
+    y_pred = model(x)
+
+    # 计算损失
+    loss = criterion(y_pred,y)
+    print(i,loss.item())
+
+    # 反向传递前零化梯度
+    optimizer.zero_grad()
+
+    # 反向传递
+    loss.backward()
+
+    # 调用优化算法的setp()函数来更新参数
+    optimizer.step()
+```  
+
+### PyTorch: 控制流 + 权重共享  
+
+作为动态图和共享权重的一个例子，我们实现一个分成奇怪的模型：一个全连接ReLU网络，每个前向传递从1到4之间选择一个随机数并且使用那么多隐藏层，重复多次使用相同的权重计算最深的隐藏层。  
+
+对于这个模型，我们可以使用普通的Python流控制来实现循环，并且我们可以通过在定义正向传递时多次重用同一个模型来实现最内层之间的权重共享。  
+
+通过子类化的方式我们可以轻松实现这个模型：  
+
+```python
+import random
+import torch
+
+
+class DynamicNet(torch.nn.Module):
+    def __init__(self, D_in, H, D_out):
+        super(DynamicNet, self).__init__()
+        self.input_linear = torch.nn.Linear(D_in, H)
+        self.middle_linear = torch.nn.Linear(H, H)
+        self.output_linear = torch.nn.Linear(H, D_out)
+
+    def forward(self, x):
+        h_relu = self.input_linear(x).clamp(min=0)
+        for _ in range(random.randint(0, 3)):
+            h_relu = self.middle_linear(h_relu).clamp(min=0)
+        y_pred = self.output_linear(h_relu)
+        return y_pred
+
+
+# N是批量大小，D_in 是输入维度，H 是隐藏维度， D_out 是输出维度
+N, D_in, H, D_out = 64, 1000, 100, 10
+
+# 随机创建输入输出数据
+x = torch.randn(N, D_in)
+y = torch.randn(N, D_out)
+
+# 实例化自定义模型
+model = DynamicNet(D_in, H, D_out)
+
+# 损失函数和优化函数
+criterion = torch.nn.MSELoss(reduction='sum')
+optimizer = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9)
+
+for i in range(500):
+    # 前向传递：使用模型计算关于x的预测y
+    y_pred = model(x)
+
+    # 计算损失
+    loss = criterion(y_pred, y)
+    print(i, loss.item())
+
+    # 反向传递前零化梯度
+    optimizer.zero_grad()
+
+    # 反向传递
+    loss.backward()
+
+    # 调用优化算法的setp()函数来更新参数
+    optimizer.step()
+```
