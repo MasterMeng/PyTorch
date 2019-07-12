@@ -162,22 +162,50 @@ def visualize_model(model, num_images=6):
         model.train(mode=was_training)
 
 
-model_ft = models.resnet18(pretrained=True)
-num_ftrs = model_ft.fc.in_features
-model_ft.fc = nn.Linear(num_ftrs, 2)
+# model_ft = models.resnet18(pretrained=True)
+# num_ftrs = model_ft.fc.in_features
+# model_ft.fc = nn.Linear(num_ftrs, 2)
 
-model_ft = model_ft.to(device)
+# model_ft = model_ft.to(device)
+
+# criterion = nn.CrossEntropyLoss()
+
+# # 优化所有参数
+# optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
+
+# # 没7次，学习率衰减0.1
+# exp_lr_scheduler = torch.optim.lr_scheduler.StepLR(
+#     optimizer_ft, step_size=7, gamma=0.1)
+
+# model_ft = train_model(model_ft, criterion, optimizer_ft,
+#                        exp_lr_scheduler, num_epochs=25)
+
+# visualize_model(model_ft)
+
+
+model_conv = models.resnet18(pretrained=True)
+for param in model_conv.parameters():
+    param.requires_grad = False
+
+# 新构造模块的参数默认requires_grad=True
+num_ftrs = model_conv.fc.in_features
+model_conv.fc = nn.Linear(num_ftrs, 2)
+
+model_conv = model_conv.to(device)
 
 criterion = nn.CrossEntropyLoss()
 
 # 优化所有参数
-optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
+optimizer_ft = optim.SGD(model_conv.parameters(), lr=0.001, momentum=0.9)
 
 # 没7次，学习率衰减0.1
 exp_lr_scheduler = torch.optim.lr_scheduler.StepLR(
     optimizer_ft, step_size=7, gamma=0.1)
 
-model_ft = train_model(model_ft, criterion, optimizer_ft,
-                       exp_lr_scheduler, num_epochs=25)
+model_conv = train_model(model_conv, criterion, optimizer_ft,
+                         exp_lr_scheduler, num_epochs=25)
 
-visualize_model(model_ft)
+visualize_model(model_conv)
+
+plt.ioff()
+plt.show()
