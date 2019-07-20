@@ -126,12 +126,12 @@ class Voc:
         self.index2word = {PAD_token: 'PAD',
                            SOS_token: 'SOS', EOS_token: 'EOS'}
         self.num_words = 3
-    
-    def addSentence(self,sentence):
+
+    def addSentence(self, sentence):
         for word in sentence.split(' '):
             self.addWord(word)
 
-    def addWord(self,word):
+    def addWord(self, word):
         if word not in self.word2index:
             self.word2index[word] = self.num_words
             self.word2count[word] = 1
@@ -140,19 +140,20 @@ class Voc:
         else:
             self.word2count[word] += 1
 
-    def trim(self,min_count):
+    def trim(self, min_count):
         if self.trimmed:
             return
         self.trimmed = True
 
         keep_words = []
 
-        for k,v in self.word2count.items():
+        for k, v in self.word2count.items():
             if v >= min_count:
                 keep_words.append(k)
 
         print('keep_words {} / {} = {:.4f}'.format(
-            len(keep_words),len(self.word2index),len(keep_words)/len(self.word2index)
+            len(keep_words), len(self.word2index), len(
+                keep_words)/len(self.word2index)
         ))
 
         self.word2index = {}
@@ -163,3 +164,95 @@ class Voc:
 
         for word in keep_words:
             self.addWord(word)
+
+
+MAX_LENGTH = 10
+
+# Unicode字符串转ASCII
+def unicodeToAscii(s):
+    return ''.join(
+        c for c in unicodedata.normalize('NFD', s)
+        if unicodedata.category(c) != 'Mn'
+    )
+
+# 小写化，裁剪、移除非字母字符
+def normalizeString(s):
+    s = unicodeToAscii(s.lower().strip())
+    s = re.sub(r"([.!?])", r" \1", s)
+    s = re.sub(r"[^a-zA-Z.!?]+", r" ", s)
+    s = re.sub(r"\s+", r" ", s).strip()
+    return s
+
+# 读取问/大对并返回词汇表对象
+def readVoc(datafile, corpus_name):
+    print('Reading lines...')
+    # 读取文件并切割成行
+    lines = open(datafile, encoding='utf-8').read().strip().split('\n')
+
+    # 分割行成对并标准化
+    pairs = [[normalizeString(s) for s in l.split('\t')] for l in lines]
+    voc = Voc(corpus_name)
+    return voc, pairs
+
+
+# 如果问/答对p中的语句都在MAX_LENGTH阈值之下，返回True
+def filterPair(p):
+    return len(p[0].split(' ')) < MAX_LENGTH and len(p[1].split(' ')) < MAX_LENGTH
+
+# 过滤
+def filterPairs(pairs):
+    return [pair for pair in pairs if filterPair(pair)]
+
+# 使用上面定义的函数，返回填充过的词汇表和问答对列表
+def loadPrepareDate(corpus,corpus_name,datafile,save_dir):
+    print('Start preparing training data ...')
+    voc,pairs = readVoc(datafile,corpus_name)
+    print('Read {!s} sentence pairs'.format(len(pairs)))
+    pairs = filterPairs(pairs)
+    print('Trimmed to {!s} sentence pairs'.format(len(pairs)))
+    print('Counting words...')
+    for pair in pairs:
+        voc.addSentence(pair[0])
+        voc.addSentence(pair[1])
+    print('Counted words: ',voc.num_words)
+    return voc,pairs
+
+# 调用
+save_dir = os.path.join('data','save')
+voc,pairs = loadPrepareDate(corpus,corpus_name,datafile,save_dir)
+print('\npairs:')
+for pair in pairs[:10]:
+    print(pair)  
+
+
+MIN_COUNT = 3  
+
+def trimRareWords(voc,pairs,MIN_COUNT):
+    # 裁剪词汇表中使用次数在MIN_COUNT阈值之下的词
+    voc.trim(MIN_COUNT)
+    # 使用裁剪的词过滤语句对
+    keep_pairs = []
+    for pair in pairs:
+        input_sentence = pair[0]
+        output_sentence = pair[1]
+        keep_input = True
+        keep_output = True
+
+        # 检查输入语句
+        for word in input_sentence.split(' '):
+            if word not in voc.word2index:
+                keep_input = False
+                break
+        # 检查输出语句
+        for word in output_sentence.split(' '):
+            if word not in voc.word2index:
+                keep_output = False
+                break
+        
+        if keep_input and keep_output:
+            keep_pairs.append(pair)
+
+    print('Trimmed from {} pairs to {}, {:.4f} of total'.format(len(pairs),len(keep_pairs),len(keep_pairs)/len(pairs)))
+    return keep_pairs
+
+pairs =trimRareWords(voc,pairs,MIN_COUNT)

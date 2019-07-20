@@ -232,6 +232,199 @@ b'Gosh, if only we could find Kat a boyfriend...\tLet me see what I can do.\n'
 所以我们定义一个`Voc`类，它保存词到索引的映射、索引到词的反映射、每个单词的计数和总词数。类中提供了向词汇表中添加单词(`addWord`)、添加一个句子中所有的词(`addSentence`)和修建不常见的词(`trim`)。更多关于`trimming`稍后介绍。  
 
 ```python
+# 默认文字标记
+PAD_token = 0   # 用来追加段句子
+SOS_token = 0   # 句首标记
+EOS_token = 0   # 句尾标记
 
+
+class Voc:
+    def __init__(self, name):
+        self.name = name
+        self.trimmed = False
+        self.word2index = {}
+        self.word2count = {}
+        self.index2word = {PAD_token: 'PAD',
+                           SOS_token: 'SOS', EOS_token: 'EOS'}
+        self.num_words = 3
+    
+    def addSentence(self,sentence):
+        for word in sentence.split(' '):
+            self.addWord(word)
+
+    def addWord(self,word):
+        if word not in self.word2index:
+            self.word2index[word] = self.num_words
+            self.word2count[word] = 1
+            self.index2word[self.num_words] = word
+            self.num_words += 1
+        else:
+            self.word2count[word] += 1
+
+    def trim(self,min_count):
+        if self.trimmed:
+            return
+        self.trimmed = True
+
+        keep_words = []
+
+        for k,v in self.word2count.items():
+            if v >= min_count:
+                keep_words.append(k)
+
+        print('keep_words {} / {} = {:.4f}'.format(
+            len(keep_words),len(self.word2index),len(keep_words)/len(self.word2index)
+        ))
+
+        self.word2index = {}
+        self.word2count = {}
+        self.index2word = {PAD_token: 'PAD',
+                           SOS_token: 'SOS', EOS_token: 'EOS'}
+        self.num_words = 3
+
+        for word in keep_words:
+            self.addWord(word)
 ```
 
+现在我们可以收集我们的词汇表和问/答语句对。在我们准备使用这些数据前，我们还必须做些处理。  
+
+首先，我们需要使用`unicodeToAscii`将Unicode字符串转成ASCII。接着，我们需要使用`normalizeString`将所有的字母转为小写字母并裁减掉除基本标点符号外的所有非字母字符。最后，为了帮助训练收敛性，我们将使用`filterPairs`过滤长度大于MAX_LENGTH阈值的句子。  
+
+```python
+MAX_LENGTH = 10
+
+# Unicode字符串转ASCII
+def unicodeToAscii(s):
+    return ''.join(
+        c for c in unicodedata.normalize('NFD', s)
+        if unicodedata.category(c) != 'Mn'
+    )
+
+# 小写化，裁剪、移除非字母字符
+def normalizeString(s):
+    s = unicodeToAscii(s.lower().strip())
+    s = re.sub(r"([.!?])", r" \1", s)
+    s = re.sub(r"[^a-zA-Z.!?]+", r" ", s)
+    s = re.sub(r"\s+", r" ", s).strip()
+    return s
+
+# 读取问/大对并返回词汇表对象
+def readVoc(datafile, corpus_name):
+    print('Reading lines...')
+    # 读取文件并切割成行
+    lines = open(datafile, encoding='utf-8').read().strip().split('\n')
+
+    # 分割行成对并标准化
+    pairs = [[normalizeString(s) for s in l.split('\t')] for l in lines]
+    voc = Voc(corpus_name)
+    return voc, pairs
+
+
+# 如果问/答对p中的语句都在MAX_LENGTH阈值之下，返回True
+def filterPair(p):
+    return len(p[0].split(' ')) < MAX_LENGTH and len(p[1].split(' ')) < MAX_LENGTH
+
+# 过滤
+def filterPairs(pairs):
+    return [pair for pair in pairs if filterPair(pair)]
+
+# 使用上面定义的函数，返回填充过的词汇表和问答对列表
+def loadPrepareDate(corpus,corpus_name,datafile,save_dir):
+    print('Start preparing training data ...')
+    voc,pairs = readVoc(datafile,corpus_name)
+    print('Read {!s} sentence pairs'.format(len(pairs)))
+    pairs = filterPairs(pairs)
+    print('Trimmed to {!s} sentence pairs'.format(len(pairs)))
+    print('Counting words...')
+    for pair in pairs:
+        voc.addSentence(pair[0])
+        voc.addSentence(pair[1])
+    print('Counted words: ',voc.num_words)
+    return voc,pairs
+
+# 调用
+save_dir = os.path.join('data','save')
+voc,pairs = loadPrepareDate(corpus,corpus_name,datafile,save_dir)
+print('\npairs:')
+for pair in pairs[:10]:
+    print(pair)
+```
+
+输出：  
+
+```text
+Start preparing training data ...
+Reading lines...
+Read 221282 sentence pairs
+Trimmed to 64271 sentence pairs
+Counting words...
+Counted words:  18008
+
+pairs:
+['there .', 'where ?']
+['you have my word . as a gentleman', 'you re sweet .']
+['hi .', 'looks like things worked out tonight huh ?']
+['you know chastity ?', 'i believe we share an art instructor']
+['have fun tonight ?', 'tons']
+['well no . . .', 'then that s all you had to say .']
+['then that s all you had to say .', 'but']
+['but', 'you always been this selfish ?']
+['do you listen to this crap ?', 'what crap ?']
+['what good stuff ?', 'the real you .']
+```
+
+另一个有利于在训练期间实现更快速收敛的策略是修剪我们词汇表中很少使用的词。减少特征空间的维度可以弱化模型必须学习的逼近函数的难度。我们将分两步来处理：  
+
+1. 使用`voc.trim`函数裁剪使用低于`MIN_COUNT`阈值的词
+2. 使用裁剪的词过滤语句对  
+
+```python
+MIN_COUNT = 3  
+
+def trimRareWords(voc,pairs,MIN_COUNT):
+    # 裁剪词汇表中使用次数在MIN_COUNT阈值之下的词
+    voc.trim(MIN_COUNT)
+    # 使用裁剪的词过滤语句对
+    keep_pairs = []
+    for pair in pairs:
+        input_sentence = pair[0]
+        output_sentence = pair[1]
+        keep_input = True
+        keep_output = True
+
+        # 检查输入语句
+        for word in input_sentence.split(' '):
+            if word not in voc.word2index:
+                keep_input = False
+                break
+        # 检查输出语句
+        for word in output_sentence.split(' '):
+            if word not in voc.word2index:
+                keep_output = False
+                break
+        
+        if keep_input and keep_output:
+            keep_pairs.append(pair)
+
+    print('Trimmed from {} pairs to {}, {:.4f} of total'.format(len(pairs),len(keep_pairs),len(keep_pairs)/len(pairs)))
+    return keep_pairs
+
+pairs =trimRareWords(voc,pairs,MIN_COUNT)
+```  
+
+输出：  
+
+```text
+keep_words 7823 / 18005 = 0.4345
+Trimmed from 64271 pairs to 53165, 0.8272 of total
+```  
+
+## 为模型处理数据  
+
+尽管我们已经花费了大量的努力来处理和粉饰词汇表和语句对列表中的数据，但是最终我们模型期望数值型torch张量作为输入。在<font color="red">seq2seq转换教程</font>中可以找到一种为模型准备处理后数据的方法。在那个教程中，我们使用的批大小是1，意味着我们所要做的就是将我们语句对中词转换成词汇表中恰当的索引值并输入给模型。  
+
+然而，如果你对加速训练或者想利用GPU并行化处理，那么你需要小批量进行训练。  
+
+使用小批量也意味着我们需要记住我们所有批次中句子长度的差异。为了在同一批处理中容纳不同大小的句子，我们将使批处理后的输入张量的shape为(max_length,batch_size)，其中小于max_length的句子在EOS_token之后用0填充。  
+
+如果我们通过将单词转换成索引(`indexesFromSentence`)和零值填充的方式简单地将语句转换成张量，我们的张量将有shape(batch_size,max_length)，索引第一个维度将在所有时间步长返回一个完整的序列。
