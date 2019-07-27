@@ -427,4 +427,247 @@ Trimmed from 64271 pairs to 53165, 0.8272 of total
 
 使用小批量也意味着我们需要记住我们所有批次中句子长度的差异。为了在同一批处理中容纳不同大小的句子，我们将使批处理后的输入张量的shape为(max_length,batch_size)，其中小于max_length的句子在EOS_token之后用0填充。  
 
-如果我们通过将单词转换成索引(`indexesFromSentence`)和零值填充的方式简单地将语句转换成张量，我们的张量将有shape(batch_size,max_length)，索引第一个维度将在所有时间步长返回一个完整的序列。
+如果我们通过将单词转换成索引(`indexesFromSentence`)和零值填充的方式简单地将语句转换成张量，我们的张量将有shape(batch_size,max_length)，索引第一个维度将在所有时间步长返回一个完整的序列。然而，我们需要在一段时间内索引我们的批次，并且包括批次中的所有序列。因此，我们将我们输出批次的shape转为(*max_kength*,*batch_size*)，这样索引第一个维度返回批处理中所有句子的时间步长。我们在`zeroPadding`函数中隐式处理这个转换。  
+
+![batch_transpose](../../../pics/batch_transpose.png)  
+
+`inputVar`函数处理将语句转换成张量的过程，最终创建一个形状正确的零填充张量。同时它也返回一个`lengths`张量，用于批次中的每个序列，稍后将传递给我们的编码器。  
+
+`outputVar`函数功能与`inputVar`相似，但是不返回`lengths`张量，而是返回一个二进制掩码张量和最大目标语句的长度。二进制掩码张量有着与输出目标张量相同的邢专，但*PAD_token*元素为0，其它为1。  
+
+`batch2TrainData`简单地输入一系列语句对转化，通过上述函数处理返回输入和目标张量。  
+
+```python
+def indexesFromSentence(voc, sentence):
+    return [voc.word2index[word] for word in sentence.split(' ')] + [EOS_token]
+
+
+def zeroPadding(l, fillvalue=PAD_token):
+    return list(itertools.zip_longest(*l, fillvalue=fillvalue))
+
+
+def binaryMatrix(l, value=PAD_token):
+    m = []
+    for i, seq in enumerate(l):
+        m.append([])
+        for token in seq:
+            if token == PAD_token:
+                m[i].append(0)
+            else:
+                m[i].append(1)
+    return m
+
+
+def inputVar(l, voc):
+    indexes_batch = [indexesFromSentence(voc, sentence) for sentence in l]
+    lengths = torch.tensor([len(indexes) for indexes in indexes_batch])
+    padList = zeroPadding(indexes_batch)
+    padVar = torch.LongTensor(padList)
+    return padVar, lengths
+
+
+def outputVar(l, voc):
+    indexes_batch = [indexesFromSentence(voc, sentence) for sentence in l]
+    max_target_len = max([len(indexes) for indexes in indexes_batch])
+    padList = zeroPadding(indexes_batch)
+    mask = binaryMatrix(padList)
+    mask = torch.ByteTensor(mask)
+    padVar = torch.LongTensor(padList)
+    return padVar, mask, max_target_len
+
+
+def batch2TrainData(voc, pair_batch):
+    pair_batch.sort(key=lambda x: len(x[0].split(' ')), reverse=True)
+    input_batch, output_batch = [], []
+    for pair in pair_batch:
+        input_batch.append(pair[0])
+        output_batch.append(pair[1])
+    inp, lengths = inputVar(input_batch, voc)
+    output, mask, max_target_len = outputVar(output_batch, voc)
+    return inp, lengths, output, mask, max_target_len
+
+
+# 验证
+small_batch_size = 5
+batches = batch2TrainData(voc, [random.choice(pairs)
+                                for _ in range(small_batch_size)])
+input_variable, lengths, target_variable, mask, max_target_len = batches
+
+print('input variable:', input_variable)
+print('lengths:', lengths)
+print('target variable:', target_variable)
+print('mask:', mask)
+print('max_target_len:', max_target_len)
+```
+
+输出：  
+
+```python
+input variable: tensor([[   7,  112,   36,    7,  348],
+        [  18,  785,   37,   89,   64],
+        [ 709, 2100, 4428,  527,    4],
+        [4932,    7,   12,   45,    0],
+        [ 313,  236, 3736, 1947,    0],
+        [ 329,    4,   56,    4,    0],
+        [ 791,    4,  283,    0,    0],
+        [1127,    4,    4,    0,    0],
+        [   6,    0,    0,    0,    0],
+        [   0,    0,    0,    0,    0]])
+lengths: tensor([10,  9,  9,  7,  4])
+target variable: tensor([[ 304,  236,   33,   61,    8],
+        [1985,   50,    6,  250,  371],
+        [   4,    6,    0, 2235,   96],
+        [   0,    0,    0,  174,   81],
+        [   0,    0,    0,   12,    6],
+        [   0,    0,    0,  477,    0],
+        [   0,    0,    0,    4,    0],
+        [   0,    0,    0,    0,    0]])
+mask: tensor([[1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1],
+        [1, 1, 0, 1, 1],
+        [0, 0, 0, 1, 1],
+        [0, 0, 0, 1, 1],
+        [0, 0, 0, 1, 0],
+        [0, 0, 0, 1, 0],
+        [0, 0, 0, 0, 0]], dtype=torch.uint8)
+max_target_len: 8
+```  
+
+## 定义模型  
+
+### Seq2Seq 模型  
+
+我们的聊天机器人的核心是序列到序列（seq2seq）模型。seq2seq模型的目标是将可变长度的序列作为输入，通过固定大小模型返回一个可变长度的序列作为输出。  
+
+[<font color="red">Sutskever et al.</font>](https://arxiv.org/abs/1409.3215)发现通过两个独立的递归神经网络，我们可以完成这项任务。其中一个RNN充当编码器，它将可变长度的输入序列编码为固定长度的上下文向量。理论上，这个上下文向量(RNN的最后一个隐藏层)将包含关于输入到机器人的查询语句的语义信息。第二个RNN是一个解码器，它接受一个输入单词和上下文向量，并返回序列中下一个单词的猜测和一个隐藏状态，以便在下一次迭代中使用。  
+
+![encoder decoder](../../../pics/encoder_decoder.png)  
+
+图像来源：[https://jeddy92.github.io/JEddy92.github.io/ts_seq2seq_intro/](https://jeddy92.github.io/JEddy92.github.io/ts_seq2seq_intro/)  
+
+### 编码器  
+
+编码器RNN遍历输入语句，每次一个token(例如 word)，每一步输出一个输出向量和一个隐藏状态向量。然后隐藏状态向量被传入下一步，同时记录输出向量。编码器将序列中每个点的上下文转换为高维空间中的一组点，解码器将使用这些点为给定的任务生成有意义的输出。  
+
+我们的编码器的核心是一个多层门控循环单元，由[<font color="red">Cho et al</font>](https://arxiv.org/pdf/1406.1078v3.pdf)。在2014年。我们将使用GRU的双向变体，这意味着本质上有两个独立的RNNs:一个按正常顺序输入序列，另一个按相反顺序输入序列。每个网络的输出在每个时间步长上求和。使用双向GRU将为我们提供编码过去和未来上下文的优势。  
+
+双向RNN：  
+
+![Brdirectional RNN](../../../pics/RNN.png)
+
+图片来源：[https://colah.github.io/posts/2015-09-NN-Types-FP/](https://colah.github.io/posts/2015-09-NN-Types-FP/)  
+
+注意，嵌入层用于在任意大小的特征空间中编码单词索引。对于我们的模型，这个层将把每个单词映射到一个大小为hidden_size的特征空间。当经过训练时，这些值应该编码相似语义单词之间的语义相似性。  
+
+最后，如果填充序列传入给RNN模型，那么我们必须分别使用`nn.utils.rnn.pack_padded_sequence`和`nn.utils.rnn.pad_packed_sequence`来打包和解包RNN输入中的填充。  
+
+**计算图**：  
+
+1. 将单词索引转换成嵌入
+2. 为RNN模型打包填充批次序列
+3. 正向通过GRU
+4. 解包填充
+5. 求和双向GRU输出
+6. 返回输出和最终隐藏状态  
+
+**输入**：  
+
+* `input_seq`：输入序列的批次，shape=(*max_length*,*batch_size*)
+* `input_lengths`：对应批次中每个序列长度的列表，shape=(*batch_size*)
+* `hidden`：隐藏状态，shape=(*n_layers x num_directions*,*batch_size*,*hidden_size*)  
+
+**输出**：  
+
+* `outputs`：GRU最后一个隐藏层的输出特征（求和双向输出）,shape=(*max_length*,*batch_size*,*hidden_size*)
+* `hidden`：从GRU中更新的隐藏状态，shape=(*n_layers x num_directions*,*batch_size*,*hidden_size*)  
+
+```python
+class EncoderRNN(nn.Module):
+    def __init__(self, hidden_size, embedding, n_layers=1, dropout=0):
+        super(EncoderRNN, self).__init__()
+        self.n_layers = n_layers
+        self.hidden_size = hidden_size
+        self.embedding = embedding
+
+        # 初始化GRU：input_size和hidden_size参数都设为hidden_size
+        self.gru = nn.GRU(hidden_size, hidden_size, n_layers, dropout=(
+            0 if n_layers == 1 else dropout), bidirectional=True)
+
+    def forward(self, input_seq, input_lengths, hidden=None):
+        embedded = self.embedding(input_seq)
+        packed = nn.utils.rnn.pack_padded_sequence(embedded, input_lengths)
+        # 正向
+        outputs, hidden = self.gru(packed, hidden)
+
+        # 解包
+        outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs)
+
+        # 求和双向输出
+        outputs = outputs[:, :, :self.hidden_size] + \
+            outputs[:, :, self.hidden_size:]
+
+        return outputs, hidden
+```  
+
+### 解码器  
+
+解码器RNN以令牌对令牌的方式生成响应语句。它使用编码器的上下文向量和内部隐藏状态来生成序列中的下一个单词。它继续生成单词，直到输出表示句子末尾的EOS_token。普通seq2seq解码器的一个常见问题是，如果我们完全依赖上下文向量来编码整个输入序列的含义，很可能会丢失信息。在处理长输入序列时尤其如此，这极大地限制了我们解码器的性能。  
+
+为了解决这个问题，[<font color="red">Bahdanau et al.</font>](https://arxiv.org/abs/1409.0473)创建了一个“注意力机制”，允许解码器留意输入序列的某些部分，而不是每一步都使用整个固定的上下文。  
+
+在高层次上，注意力是通过解码器的当前隐藏状态和编码器的输出计算出来的。输出注意力的权重值与输入序列形状相同，允许我们将其与编码器的输出相乘，得到一个表示编码器输出需要注意的部分的加权和。[<font color="red">Sean Robertsons</font>](https://github.com/spro)图很好地描述了这些：  
+
+![Sean Robertson图](../../../pics/Sean_Robertson图.png)  
+
+[<font color="red">Luong et al.</font>](https://arxiv.org/abs/1508.04025)通过创建“全局关注”在Bahdanau等人的基础上进行了改进。关键的不同在于“全局关注”，我们考虑到编码器的所有隐藏状态，而Bahdanau等人的“局部关注”只考虑当前时间步长下的编码器的隐藏状态。另一个不同点在于，在“全局关注”中，我们只使用当前时间步长的解码器的隐藏状态来计算注意力的权重值或能量。Bahdanau等人的注意力计算要求知道前一个时间步长的解码器的状态。同时，Luong等人提供了各种方法来计算编码器输出与解码器输出之间的注意力能量，这些方法被称之为“score functions”：  
+
+![score functions](../../../pics/score.png)  
+
+这里的$h_t$表示当前目标解码器状态，$\stackrel{-}{h_s}$表示所有的编码器状态。  
+
+综上，全局关注机制可以用下图进行总结。注意我们将使用一个叫做`Attn`的`nn.Module`来实现“关注层”。这个模型的输出是一个形状为（*batch_size*,*1*,*max_length*）的归一化之后的权重向量。  
+
+![Global Attention figure](../../../pics/global.png)  
+
+```python
+class Attn(nn.Module):
+    def __init__(self, method, hidden_size):
+        super(Attn, self).__init__()
+        self.method = method
+        if self.method not in ['dot', 'general', 'concat']:
+            raise ValueError(
+                self.method, 'is not an appropriate attention method')
+
+        self.hidden_size = hidden_size
+        if self.method == 'general':
+            self.attn = nn.Linear(self.hidden_size, hidden_size)
+        elif self.method == 'concat':
+            self.attn = nn.Linear(self.hidden_size*2, hidden_size)
+            self.v = nn.Parameter(torch.FloatTensor(hidden_size))
+
+    def dot_score(self, hidden, encoder_output):
+        return torch.sum(hidden*encoder_output, dim=2)
+
+    def general_score(self, hidden, encoder_output):
+        energy = self.attn(encoder_output)
+        return torch.sum(hidden*energy, dim=2)
+
+    def concat_score(self, hidden, encoder_output):
+        energy = self.attn(torch.cat(
+            (hidden.expand(encoder_output.size(0), -1, -1), encoder_output), 2)).tanh()
+        return torch.sum(self.v*energy, dim=2)
+
+    def forward(self, hidden, encoder_outputs):
+        if self.method == 'general':
+            attn_energies = self.general_score(hidden, encoder_outputs)
+        elif self.method == 'concat':
+            attn_energies = self.concat_score(hidden, encoder_outputs)
+        elif self.method == 'dot':
+            attn_energies = self.dot_score(hidden, encoder_outputs)
+
+        attn_energies = absolute_import.t()
+
+        return F.softmax(attn_energies, dim=1).unsuqeeze(1)
+```  
+
+
