@@ -670,4 +670,107 @@ class Attn(nn.Module):
         return F.softmax(attn_energies, dim=1).unsuqeeze(1)
 ```  
 
+现在我们已经定义了注意力子模型，我们可以实现真正的解码器模型了。对于编码器，我们将一次一个时间步长地手动提供批次。这意味着我们嵌入的单词向量和GRU输出都拥有(1,batch_size,hidden_size)的形状。  
+
+**计算图**：  
+
+1. 获取当前输入词
+2. 前向通过GRU
+3. 根据(2)计算当前GRU输出的注意力权重
+4. 注意力权重乘以编码器输出得到新的“权重和”环境向量
+5. 使用Luong eq. 5将权重背景向量与GRU输出联系起来
+6. 使用Luong eq. 6(没有softmax)来预测下一个单词
+7. 返回输出和最终的隐藏状态
+
+**输入**：  
+
+* `input_step`：输入序列批次的一个时间步长(一个单词)，shape=(1,*batch_size*)
+* `last_hidden`：GRU的最后的隐藏层，shape=(*n_layers x num_directions*,*batch_size*,*hidden_size*)
+* `encoder_outputs`：编码器模型的输出，shape=(*max_length*,*batch_size*,*hidden_size*)
+
+**输出**：
+
+* `output`：softmax归一化后的张量，表示在解码序列中成为下一个正确单词的概率；shape=(*batch_size*,*voc.num_words*)
+* `hidden`：GRU的最终隐藏状态；shape=(*n_layers x num_directions*,*batch_size*,*hidden_size*)
+
+```python
+class LuongAttnDecoderRNN(nn.Module):
+    def __init__(self, attn_model, embedding, hidden_size, output_size, n_layers=1, dropout=0.1):
+        super(LuongAttnDecoderRNN, self).__init__()
+
+        self.attn_model = attn_model
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        self.n_layers = n_layers
+        self.dropout = dropout
+
+        self.embedding = embedding
+        self.embedding_dropout = nn.Dropout(dropout)
+        self.gru = nn.GRU(hidden_size, hidden_size, n_layers,
+                          dropout=(0 if n_layers == 1 else dropout))
+        self.concat = nn.Linear(hidden_size*2, hidden_size)
+        self.out = nn.Linear(hidden_size, output_size)
+
+        self.attn = Attn(attn_model, hidden_size)
+
+    def forward(self, input_step, last_hidden, encoder_outputs):
+        embedded = self.embedding(input_step)
+        embedded = self.embedding_dropout(embedded)
+
+        rnn_output, hidden = self.gru(embedded, last_hidden)
+        attn_weights = self.attn(rnn_output, encoder_outputs)
+
+        context = attn_weights.bmm(encoder_outputs.transpose(0, 1))
+
+        rnn_output = rnn_output.squeeze(0)
+        context = context.squeeze(1)
+        concat_input = torch.cat((rnn_output, context), 1)
+        concat_output = torch.tanh(self.concat(concat_input))
+
+        output = self.out(concat_output)
+        output = F.softmax(output, dim=1)
+
+        return output, hidden
+```
+
+## 定义训练程序  
+
+### Masked loss  
+
+由于我们处理的是批量填充序列，所以在计算损失时不能简单地考虑张量的所有元素。我们定义`maskNLLLoss`函数来计算我们的损失，它基于解码器的输出张量、目标张量和描述填充目标张量的二进制掩码张量。这个损失函数计算掩模张量中对应于1的元素的平均负对数似然。  
+
+```python
+def maskNLLLoss(inp, target, mask):
+    nTotal = mask.sum()
+    crossEntropy = - \
+        torch.log(torch.gether(inp, 1, target.view(-1, 1)).squeeze(1))
+    loss = crossEntropy.masked_select(mask), mean()
+    loss = loss.to(device)
+
+    return loss, nTotal.item()
+```
+
+### 单次训练迭代  
+
+`train`函数包含了一个单次训练迭代（单个批次输入）的算法。  
+
+我们将使用一些高明的技巧来帮助收敛：  
+
+* 第一个技巧是**teacher forcing**。这意味在某些概率下，通过`teacher_forcing_ratio`设置，我们使用当前目标单词作为解码器的下一次输入，而不是解码器的当前猜测。这种技术作为解码器的训练途径，有助于更高效的训练。然而，teacher forcing会导致模型推理过程中的不稳定，因为在训练期间，解码器可能没有足够的机会构建自己的输出序列。那么，我们必须注意如何设置`teacher_forcing_ratio`，而不是被快速收敛所愚弄。  
+* 我们使用的第二个技巧是**gradient clipping**。这项技术通常用来解决“梯度爆炸”问题。从本质上说，通过裁剪梯度或者设置最大值为阈值的方式，我们可以防止梯度呈指数级增长，并且在代价函数中防止溢出（NaN）或出现断崖式下降。  
+
+![gradient clipping](../../../pics/clipping.png)  
+
+图片来源：Goodfellow et al. DeepLearning. 2016.[https://www.deeplearningbook.org/](https://www.deeplearningbook.org/)  
+
+**操作顺序**:  
+
+1. 正向输入整个输入批次到编码器
+2. 将解码器初始化为SOS_token，将隐藏状态初始化为编码器的最终隐藏状态
+3. 按步骤前向输入批次序列到解码器
+4. 如果teacher forcing：将当前目标作为下一个解码输入；否则：将当前解码器输出作为下一步输入
+5. 计算并累积损失
+6. 执行反向传播
+7. 裁剪梯度
+8. 更新编码器和解码器模型参数  
 
